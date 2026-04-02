@@ -2,8 +2,8 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
-import Editor, { useMonaco } from '@monaco-editor/react';
+import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from 'react-resizable-panels';
+import Editor, { useMonaco, loader } from '@monaco-editor/react';
 import { useDebounce } from 'use-debounce';
 import {
   Play, Code2, RotateCcw, Maximize2, Minimize2, Copy, Check, X,
@@ -11,6 +11,9 @@ import {
 } from 'lucide-react';
 import { useCanvasStore } from '@/lib/canvasStore';
 import { buildSandboxDoc } from '@/lib/sandboxCompiler';
+
+// Configure Monaco to use UNPKG instead of JSDelivr to bypass regional network blocks (fixes 'Monaco initialization: [object Event]' error)
+loader.config({ paths: { vs: 'https://unpkg.com/monaco-editor@0.43.0/min/vs' } });
 
 interface CodeCanvasProps {
   code?: string;
@@ -136,7 +139,7 @@ export default function CodeCanvas({ code = '', language = 'text', files, onClos
 
       {/* Main Workspace */}
       <div className="flex-1 overflow-hidden relative border-b border-[#1E1E1E]">
-        <PanelGroup direction="horizontal">
+        <PanelGroup orientation="horizontal">
           
           {/* Left Panel: Code VS Code style */}
           <Panel defaultSize={50} minSize={20} className="bg-[#1E1E1E] flex flex-col">

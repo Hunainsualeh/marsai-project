@@ -77,8 +77,8 @@ function ChatLayoutInner({ children }: { children: React.ReactNode }) {
           </Link>
         </div>
 
-        {/* Model Selector — top-left floating, below sidebar toggle */}
-        <div ref={modelRef} className="absolute top-4 left-4 z-30">
+        {/* Model Selector — top-left floating, spaced to avoid sidebar toggle */}
+        <div ref={modelRef} className="absolute top-4 left-16 lg:left-4 z-30 transition-all duration-300">
           <button
             onClick={() => setShowModelSelector(!showModelSelector)}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-[11px] font-black uppercase tracking-widest transition-all backdrop-blur-md ${
