@@ -1,0 +1,40 @@
+{
+  "name": "mars",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "clean": "npx rimraf .next node_modules/.cache"
+  },
+  "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
+    "framer-motion": "^12.38.0",
+    "groq-sdk": "^1.1.2",
+    "gsap": "^3.14.2",
+    "lucide-react": "^1.7.0",
+    "mongoose": "^9.3.3",
+    "next": "16.2.2",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "react-markdown": "^10.1.0",
+    "react-resizable-panels": "^4.8.0",
+    "react-syntax-highlighter": "^16.1.1",
+    "remark-gfm": "^4.0.1",
+    "use-debounce": "^10.1.1",
+    "zustand": "^5.0.12"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@types/react-syntax-highlighter": "^15.5.13",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.2",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}
