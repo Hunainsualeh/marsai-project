@@ -10,6 +10,15 @@ export function cn(...inputs: ClassValue[]) {
  * and ensuring only expected keys are present.
  */
 /**
+ * Rough token estimator for client/server shared use.
+ * Rule of thumb: ~4 characters per token.
+ */
+export function estimateTokens(text: string): number {
+  if (!text) return 0;
+  return Math.ceil(text.length / 4);
+}
+
+/**
  * Ensures that all messages sent to LLM have valid image_url protocols.
  * Groq only supports http, https, and data:image/ protocols.
  * Any other image_urls (like ref: or file:) will be converted to text descriptions.
