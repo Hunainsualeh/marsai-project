@@ -1,14 +1,26 @@
 import { NextResponse } from 'next/server';
 import connectToDatabase from '@/lib/mongodb';
 import { Session } from '@/models/Session';
+import { getUserIdFromRequest } from '@/lib/firebaseAdmin';
 
 // GET /api/sessions — List all chat sessions
-export async function GET() {
+export async function GET(req: Request) {
   try {
+    const userId = await getUserIdFromRequest(req);
+    if (!userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const url = new URL(req.url);
+    const showTrash = url.searchParams.get('trash') === 'true';
+
     await connectToDatabase();
-    const sessions = await Session.find()
+    const sessions = await Session.find({ 
+      userId,
+      isDeleted: showTrash ? true : { $ne: true } 
+    })
       .sort({ updatedAt: -1 })
-      .select('title model createdAt updatedAt')
+      .select('title model createdAt updatedAt isPinned isDeleted')
       .lean();
 
     return NextResponse.json(sessions);
@@ -24,10 +36,16 @@ export async function GET() {
 // POST /api/sessions — Create a new chat session
 export async function POST(req: Request) {
   try {
+    const userId = await getUserIdFromRequest(req);
+    if (!userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     await connectToDatabase();
     const body = await req.json().catch(() => ({}));
 
     const session = await Session.create({
+      userId,
       title: body.title || 'New Chat',
       model: body.model || 'llama-3.3-70b-versatile',
     });

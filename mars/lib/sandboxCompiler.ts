@@ -4,9 +4,12 @@
  */
 
 export function buildSandboxDoc(files: Record<string, string>): string {
-  const html = files['index.html'] || '';
-  const css = files['style.css'] || files['styles.css'] || '';
-  const js = files['script.js'] || files['main.js'] || '';
+  const fileKeys = Object.keys(files);
+  
+  // High-priority filenames vs automatic fallback detection
+  const html = files['index.html'] || files[fileKeys.find(k => k.endsWith('.html')) || ''] || '';
+  const css = files['style.css'] || files['styles.css'] || files[fileKeys.find(k => k.endsWith('.css')) || ''] || '';
+  const js = files['script.js'] || files['main.js'] || files['app.js'] || files[fileKeys.find(k => k.endsWith('.js')) || ''] || '';
 
   // Extract <head> if present to inject safely
   let rawHead = '';
@@ -23,6 +26,15 @@ export function buildSandboxDoc(files: Record<string, string>): string {
   if (bodyMatch) {
     rawBody = bodyMatch[1];
   }
+
+  // Strip out local scripts and stylesheets since we inject them directly
+  rawBody = rawBody
+    .replace(/<script[^>]*src=["'](?:\.\/)?(?:script|main|app)\.js["'][^>]*><\/script>/gi, '')
+    .replace(/<link[^>]*href=["'](?:\.\/)?style(?:s)?\.css["'][^>]*>/gi, '');
+
+  rawHead = rawHead
+    .replace(/<script[^>]*src=["'](?:\.\/)?(?:script|main|app)\.js["'][^>]*><\/script>/gi, '')
+    .replace(/<link[^>]*href=["'](?:\.\/)?style(?:s)?\.css["'][^>]*>/gi, '');
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -66,12 +78,12 @@ export function buildSandboxDoc(files: Record<string, string>): string {
       ['log', 'info', 'warn', 'error'].forEach(proxyConsole);
 
       window.onerror = function(message, source, lineno, colno, error) {
-        console.error(error || message || "Unknown error occurred.");
+        console.error(error ? error.toString() : (message + " at line " + lineno));
         return false;
       };
       
       window.onunhandledrejection = function(event) {
-        console.error("Unhandled Promise Rejection: " + (event.reason || "Unknown reason"));
+        console.error("Unhandled Promise Rejection: " + (event.reason ? event.reason.toString() : "Unknown reason"));
       };
     })();
   </script>

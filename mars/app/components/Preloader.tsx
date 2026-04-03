@@ -3,91 +3,125 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { gsap } from 'gsap';
 
-const Preloader = () => {
+const SolarPreloader = () => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const textRef = useRef<HTMLHeadingElement>(null);
-  const barRef = useRef<HTMLDivElement>(null);
   const [complete, setComplete] = useState(false);
 
   useEffect(() => {
-    if (containerRef.current && textRef.current && barRef.current) {
+    const ctx = gsap.context(() => {
       const tl = gsap.timeline({
         onComplete: () => {
-          setTimeout(() => setComplete(true), 500);
+          // THE EXIT: Radial Expansion (Solar Flare)
+          // No delay, instant transition into the site
+          gsap.to(".grid-tile", {
+            scale: 4,
+            opacity: 0,
+            duration: 0.7,
+            stagger: {
+              grid: [10, 10],
+              from: "center",
+              amount: 0.3
+            },
+            ease: "power4.in"
+          });
+
+          gsap.to(".content-wrapper", {
+            scale: 2,
+            opacity: 0,
+            duration: 0.5,
+            ease: "power2.in",
+            onComplete: () => setComplete(true)
+          });
         }
       });
 
-      // Split text-like reveal
-      tl.fromTo(textRef.current,
-        { opacity: 0, letterSpacing: '1em', filter: 'blur(10px)' },
-        { opacity: 1, letterSpacing: '0.2em', filter: 'blur(0px)', duration: 1.5, ease: 'expo.out' }
+      // 1. Instant SVG Orbit Drawing
+      tl.fromTo(".orbit", 
+        { strokeDasharray: 400, strokeDashoffset: 400, opacity: 0 },
+        { strokeDashoffset: 0, opacity: 0.3, duration: 1, stagger: 0.1, ease: "power2.out" }
       );
 
-      // Bar progress
-      tl.fromTo(barRef.current,
-        { scaleX: 0 },
-        { scaleX: 1, duration: 1.2, ease: 'power4.inOut' },
-        "-=1.0"
+      // 2. Planet Alignment (Sharp dots)
+      tl.fromTo(".planet", 
+        { scale: 0 },
+        { scale: 1, duration: 0.4, stagger: 0.05, ease: "back.out(2)" },
+        "-=0.8"
       );
 
-      // Exit reveal
-      tl.to(containerRef.current, {
-        yPercent: -100,
-        duration: 1,
-        ease: 'power4.inOut',
-        delay: 0.2
+      // 3. Text "Signal" Reveal
+      tl.fromTo(".mars-title", 
+        { y: 10, opacity: 0, filter: "blur(5px)" },
+        { y: 0, opacity: 1, filter: "blur(0px)", duration: 0.6, ease: "expo.out" },
+        "-=0.5"
+      );
+
+      // 4. Constant Subtle Rotation (Background)
+      gsap.to(".orrery-group", {
+        rotation: 360,
+        duration: 20,
+        repeat: -1,
+        ease: "none"
       });
 
-      tl.to(containerRef.current, {
-        display: 'none',
-        duration: 0
-      });
-    }
+    }, containerRef);
+
+    return () => ctx.revert();
   }, []);
 
   if (complete) return null;
 
   return (
-    <div
-      ref={containerRef}
-      className="fixed inset-0 z-[9999] bg-[#050505] flex flex-col items-center justify-center overflow-hidden"
-    >
-      {/* Background Pulse */}
-      <div className="absolute inset-0 bg-white/5 opacity-10 blur-3xl animate-pulse" />
+    <div ref={containerRef} className="fixed inset-0 z-[9999] flex items-center justify-center overflow-hidden font-mono bg-[#050505]">
+      
+      {/* Background Grid - Minimalist space coordinates */}
+      <div className="absolute inset-0 grid grid-cols-10 grid-rows-10 pointer-events-none opacity-20">
+        {[...Array(100)].map((_, i) => (
+          <div key={i} className="grid-tile border-[0.2px] border-white/10" />
+        ))}
+      </div>
 
-      <div className="relative z-10 flex flex-col items-center">
-        <h1
-          ref={textRef}
-          className="text-6xl md:text-8xl font-black text-white tracking-[0.2em] mb-8 select-none"
-        >
-          MARS
-        </h1>
+      <div className="content-wrapper relative z-10 flex flex-col items-center">
+        {/* Minimalist Solar System Orrery SVG */}
+        <svg width="240" height="240" viewBox="0 0 200 200" className="mb-6">
+          <g className="orrery-group" transform="translate(100, 100)">
+            {/* Orbits */}
+            <circle className="orbit" r="30" fill="none" stroke="white" strokeWidth="0.5" />
+            <circle className="orbit" r="55" fill="none" stroke="white" strokeWidth="0.5" />
+            <circle className="orbit" r="85" fill="none" stroke="white" strokeWidth="0.5" />
+            
+            {/* Planets (Sharp Vector Points) */}
+            <circle className="planet" cx="30" cy="0" r="1.5" fill="white" />
+            <circle className="planet" cx="-40" cy="38" r="2" fill="#ff4d00" /> {/* Mars Accent */}
+            <circle className="planet" cx="60" cy="-60" r="2.5" fill="white" />
+            
+            {/* Sun/Core */}
+            <circle cx="0" cy="0" r="1" fill="white" className="animate-ping" />
+          </g>
+        </svg>
 
-        <div className="w-64 h-[2px] bg-white/10 relative overflow-hidden">
-          <div
-            ref={barRef}
-            className="absolute inset-0 bg-white origin-left"
-          />
-        </div>
-
-        <div className="mt-6 text-[10px] font-mono text-white/30 uppercase tracking-[0.5em] animate-pulse">
-          Initializing Engine...
+        <div className="text-center">
+          <h1 className="mars-title text-4xl md:text-6xl font-bold text-white tracking-[0.8em] uppercase ml-[0.8em]">
+            Mars
+          </h1>
+          <div className="mt-4 text-[10px] tracking-[0.4em] text-white/40 uppercase">
+            Orbital_Sync_Active
+          </div>
         </div>
       </div>
 
-      {/* Scanning Line */}
-      <div className="absolute inset-0 pointer-events-none overflow-hidden opacity-20">
-        <div className="w-full h-[50dvh] bg-gradient-to-b from-transparent via-white/20 to-transparent absolute top-[-50dvh] animate-[scan_3s_linear_infinite]" />
+      {/* Frame UI */}
+      <div className="absolute top-6 left-6 text-[9px] text-white/30 space-y-1">
+        <div>SYS_REF: SOL_04</div>
+        <div>RAD_DIST: 227.9M KM</div>
       </div>
 
-      <style jsx>{`
-        @keyframes scan {
-          0% { transform: translateY(0); }
-          100% { transform: translateY(200dvh); }
-        }
-      `}</style>
+      {/* Crosshair Scanner */}
+      <div className="absolute inset-0 pointer-events-none">
+        <div className="absolute top-1/2 left-0 w-full h-[0.5px] bg-white/5" />
+        <div className="absolute top-0 left-1/2 h-full w-[0.5px] bg-white/5" />
+      </div>
     </div>
   );
 };
 
-export default Preloader;
+export default SolarPreloader;

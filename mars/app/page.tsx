@@ -29,9 +29,9 @@ const GRID_STYLE = {
 };
 
 const navItems = [
-  { label: 'Home', href: '/' },
-  { label: 'Core', href: '#sensory-architecture' },
+  { label: 'Home', href: '#hero' },
   { label: 'Moto', href: '#Moto' },
+  { label: 'Core', href: '#sensory-architecture' },
   { label: 'Chat', href: '/chat' }
 ];
 
@@ -214,7 +214,7 @@ const App = () => {
       </div>
 
       {/* ── Hero Section ── */}
-      <section ref={heroRef} className="relative min-h-screen flex items-center justify-center overflow-hidden bg-[#050505] text-white px-6">
+      <section id="hero" ref={heroRef} className="relative min-h-screen flex items-center justify-center overflow-hidden bg-[#050505] text-white px-6">
 
         {/* Ambient glow */}
         <div className="absolute inset-0 z-0 pointer-events-none">
@@ -301,6 +301,9 @@ const App = () => {
             />
           ))}
         </div>
+
+        {/* Gradient blend to next section */}
+        <div className="absolute bottom-0 left-0 w-full h-48 bg-gradient-to-t from-black to-transparent pointer-events-none z-20" />
       </section>
 
       {/* particle keyframe */}

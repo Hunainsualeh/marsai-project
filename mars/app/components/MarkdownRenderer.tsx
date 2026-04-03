@@ -9,7 +9,18 @@ import { Copy, Check, Download, Play, Code2, ChevronDown } from 'lucide-react';
 import dynamic from 'next/dynamic';
 
 // Lazy load the canvas so it doesn't bloat initial render
-const CodeCanvas = dynamic(() => import('./CodeCanvas'), { ssr: false });
+const CodeCanvas = dynamic(() => import('./CodeCanvas')
+  .catch((err) => {
+    // If a chunk fails to load typically due to a stale build on mobile, force a hard reload
+    if (err?.message?.includes('Failed to load chunk') || err?.name === 'ChunkLoadError') {
+      window.location.reload();
+    }
+    console.error("Failed to load CodeCanvas", err);
+    return () => <div className="p-4 text-red-400 border border-red-500/20 rounded bg-red-500/10">Failed to load live preview canvas. Please refresh the page.</div>;
+  }), { 
+  ssr: false,
+  loading: () => <div className="p-8 flex justify-center items-center"><div className="animate-spin w-6 h-6 border-2 border-emerald-500/50 border-t-emerald-500 rounded-full" /></div>
+});
 
 interface MarkdownRendererProps {
   content: string;
@@ -19,7 +30,24 @@ interface MarkdownRendererProps {
 // Languages that can be previewed live
 const PREVIEWABLE = new Set(['html', 'css', 'javascript', 'js', 'jsx', 'tsx', 'typescript', 'ts', 'vue', 'react']);
 
-function CodeBlock({ language, code, canvasMode }: { language: string; code: string; canvasMode?: boolean }) {
+function extractVFS(content: string) {
+  const files: Record<string, string> = {};
+  const blockRegex = /```(\w*)\n([\s\S]*?)```/g;
+  let match;
+  let htmlCount = 0, cssCount = 0, jsCount = 0, tsCount = 0;
+  while ((match = blockRegex.exec(content)) !== null) {
+    const lang = match[1].toLowerCase();
+    const code = match[2];
+    if (lang === 'html') { files[htmlCount === 0 ? 'index.html' : `index${htmlCount}.html`] = code; htmlCount++; }
+    else if (lang === 'css') { files[cssCount === 0 ? 'style.css' : `style${cssCount}.css`] = code; cssCount++; }
+    else if (['js', 'javascript'].includes(lang)) { files[jsCount === 0 ? 'script.js' : `script${jsCount}.js`] = code; jsCount++; }
+    else if (['ts', 'typescript'].includes(lang)) { files[tsCount === 0 ? 'script.ts' : `script${tsCount}.ts`] = code; tsCount++; }
+    else if (['jsx', 'tsx', 'react'].includes(lang)) { files[jsCount === 0 ? 'App.jsx' : `App${jsCount}.jsx`] = code; jsCount++; }
+  }
+  return files;
+}
+
+function CodeBlock({ language, code, canvasMode, allFiles }: { language: string; code: string; canvasMode?: boolean; allFiles?: Record<string, string> }) {
   const canPreview = PREVIEWABLE.has(language.toLowerCase());
   const [copied, setCopied] = useState(false);
   // When canvasMode is active, auto-open preview for previewable code
@@ -78,12 +106,12 @@ function CodeBlock({ language, code, canvasMode }: { language: string; code: str
                 onClick={() => setShowCanvas(!showCanvas)}
                 className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[9px] font-black uppercase tracking-wider transition-all ${
                   showCanvas
-                    ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400'
-                    : 'bg-white/[0.04] border-white/10 text-white/40 hover:text-white hover:border-white/25'
+                    ? 'bg-[#1E1E1E] border-[#333] text-white/60 hover:text-white hover:bg-[#252525]'
+                    : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20 hover:text-emerald-300'
                 }`}
               >
                 {showCanvas ? <Code2 size={10} /> : <Play size={10} fill="currentColor" />}
-                {showCanvas ? 'Code Only' : 'Live Preview'}
+                {showCanvas ? 'Close Preview' : 'Live Preview'}
               </button>
             )}
 
@@ -110,12 +138,13 @@ function CodeBlock({ language, code, canvasMode }: { language: string; code: str
               <button
                 onClick={() => setCanvasOpen(true)}
                 className="p-1.5 text-white/25 hover:text-white hover:bg-white/5 rounded-lg transition-all"
-                title="Open in Code Canvas"
+                title="Expand to Fullscreen"
               >
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="3" y="3" width="18" height="18" rx="2" />
-                  <path d="M3 9h18" />
-                  <path d="M9 21V9" />
+                  <polyline points="15 3 21 3 21 9" />
+                  <polyline points="9 21 3 21 3 15" />
+                  <line x1="21" y1="3" x2="14" y2="10" />
+                  <line x1="3" y1="21" x2="10" y2="14" />
                 </svg>
               </button>
             )}
@@ -123,23 +152,27 @@ function CodeBlock({ language, code, canvasMode }: { language: string; code: str
         </div>
 
         {/* Syntax highlighted code */}
-        <div className={`overflow-x-auto text-sm ${showCanvas ? 'border-b border-[#1E1E1E]' : ''}`}>
-          <SyntaxHighlighter
-            style={vscDarkPlus as Record<string, React.CSSProperties>}
-            language={language}
-            PreTag="div"
-            customStyle={{ margin: 0, padding: '16px', background: 'transparent' }}
-            codeTagProps={{ style: { fontFamily: 'Fira Code, Cascadia Code, JetBrains Mono, monospace', fontSize: '12.5px', lineHeight: '1.65' } }}
-          >
-            {code}
-          </SyntaxHighlighter>
-        </div>
+        {!showCanvas && (
+          <div className="overflow-x-auto text-sm">
+            <SyntaxHighlighter
+              style={vscDarkPlus as Record<string, React.CSSProperties>}
+              language={language}
+              PreTag="div"
+              wrapLongLines={true}
+              customStyle={{ margin: 0, padding: '16px', background: 'transparent', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+              codeTagProps={{ style: { fontFamily: 'Fira Code, Cascadia Code, JetBrains Mono, monospace', fontSize: '12.5px', lineHeight: '1.65', whiteSpace: 'pre-wrap' } }}
+            >
+              {code}
+            </SyntaxHighlighter>
+          </div>
+        )}
 
         {/* Inline Code Canvas preview (below the code) */}
         {showCanvas && canPreview && (
           <CodeCanvas
             code={code}
             language={language}
+            files={allFiles && Object.keys(allFiles).length > 1 ? allFiles : undefined}
             inline={true}
           />
         )}
@@ -150,6 +183,7 @@ function CodeBlock({ language, code, canvasMode }: { language: string; code: str
         <CodeCanvas
           code={code}
           language={language}
+          files={allFiles && Object.keys(allFiles).length > 1 ? allFiles : undefined}
           onClose={() => setCanvasOpen(false)}
           inline={false}
         />
@@ -159,8 +193,10 @@ function CodeBlock({ language, code, canvasMode }: { language: string; code: str
 }
 
 const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, canvasMode }) => {
+  const allFiles = React.useMemo(() => extractVFS(content), [content]);
+
   return (
-    <div className="prose prose-invert max-w-none break-words leading-relaxed text-[#D1D5DB]">
+    <div className="prose prose-invert max-w-none break-words leading-relaxed text-[#D1D5DB] [overflow-wrap:anywhere] [word-break:break-word]">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
@@ -169,24 +205,15 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, canvasMode
             const language = match?.[1] || '';
             const codeString = String(children).replace(/\\n$/, '');
 
-            if (!inline && match) {
-              // Intercept the bespoke RENDER_CANVAS JSON payload
-              if (language === 'json') {
-                try {
-                  const parsed = JSON.parse(codeString);
-                  if (parsed.action === 'RENDER_CANVAS' && parsed.files) {
-                    return <div className="my-4"><CodeCanvas files={parsed.files} inline={true} /></div>;
-                  }
-                } catch (e) {
-                  // Fallthrough to normal JSON code block rendering if it fails to parse or lacks the signature
-                }
+            if (!inline) {
+              if (match) {
+                return <CodeBlock language={language} code={codeString} canvasMode={canvasMode} allFiles={allFiles} />;
               }
-              return <CodeBlock language={language} code={codeString} canvasMode={canvasMode} />;
             }
 
             return (
               <code
-                className="bg-[#1A1A1A] text-[#00FF41] px-1.5 py-0.5 rounded-md font-mono text-[0.9em]"
+                className="bg-[#1A1A1A] text-[#00FF41] px-1.5 py-0.5 rounded-md font-mono text-[0.9em] break-words [overflow-wrap:anywhere] whitespace-pre-wrap"
                 {...props}
               >
                 {children}
@@ -207,6 +234,11 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, canvasMode
           h3: ({ children }) => <h3 className="text-lg font-semibold mt-6 mb-2 text-white">{children}</h3>,
           blockquote: ({ children }) => (
             <blockquote className="border-l-4 border-[#333] pl-4 italic text-[#888] my-4">{children}</blockquote>
+          ),
+          pre: ({ children }) => (
+            <pre className="bg-[#0D0D0D] border border-[#1E1E1E] rounded-xl p-4 my-4 whitespace-pre-wrap break-words overflow-x-hidden">
+              {children}
+            </pre>
           ),
           table: ({ children }) => (
             <div className="overflow-x-auto my-4">

@@ -18,7 +18,7 @@ const Marquee: React.FC<MarqueeProps> = ({ items, direction = "left", speed = "3
     const displayItems = [...items, ...items, ...items];
 
     return (
-        <div className="flex overflow-hidden select-none py-3">
+        <div className="flex overflow-hidden select-none py-3" style={{ maskImage: 'linear-gradient(to right, transparent, black 10%, black 90%, transparent)', WebkitMaskImage: 'linear-gradient(to right, transparent, black 10%, black 90%, transparent)' }}>
             <div
                 className={`flex min-w-full shrink-0 items-center justify-around gap-4 ${direction === "left" ? "animate-marquee" : "animate-marquee-reverse"
                     }`}

@@ -1,14 +1,15 @@
+import { NextResponse } from 'next/server';
 import connectToDatabase from '@/lib/mongodb';
 import { groqClient, SYSTEM_PROMPT, DEFAULT_MODEL } from '@/lib/groq';
 import { Session } from '@/models/Session';
 import { Message } from '@/models/Message';
+import { getUserIdFromRequest } from '@/lib/firebaseAdmin';
+import { TokenBalance } from '@/models/TokenBalance';
+import { estimateTokens } from '@/lib/tokens';
+import { sanitizeMessages } from '@/lib/utils';
 
 export const maxDuration = 60;
 
-/** Rough token estimator: ~4 chars per token */
-function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
-}
 
 /** Context window limits per model (conservative - leave buffer) */
 const CONTEXT_LIMITS: Record<string, number> = {
@@ -50,7 +51,15 @@ function trimHistory(
   return trimmed;
 }
 
+
 export async function POST(req: Request) {
+  const userId = await getUserIdFromRequest(req);
+  if (!userId) {
+    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+      status: 401, headers: { 'Content-Type': 'application/json' }
+    });
+  }
+
   let body;
   try {
     body = await req.json();
@@ -61,7 +70,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const { message, image, sessionId, model } = body;
+  const { message, image, sessionId, model, webSearch, linkUrl } = body;
 
   try {
     if (!message && !image && !sessionId) {
@@ -74,9 +83,9 @@ export async function POST(req: Request) {
     await connectToDatabase();
 
     const session = await Session.findById(sessionId);
-    if (!session) {
+    if (!session || session.userId !== userId) {
       return new Response(
-        JSON.stringify({ error: 'Session not found' }),
+        JSON.stringify({ error: 'Session not found or unauthorized' }),
         { status: 404, headers: { 'Content-Type': 'application/json' } }
       );
     }
@@ -84,12 +93,61 @@ export async function POST(req: Request) {
     let dbContent: string;
     let actualContent: unknown;
 
-    if (image) {
+    if (image && image.startsWith('data:image/')) {
       actualContent = [
         { type: 'text', text: message || '' },
         { type: 'image_url', image_url: { url: image } },
       ];
       dbContent = JSON.stringify(actualContent);
+    } else if (image && image.startsWith('data:')) {
+      try {
+        const mimeChunk = image.split(';')[0];
+        const mimeInfo = mimeChunk.split(':')[1];
+        const base64Data = image.split(',')[1];
+        const buffer = Buffer.from(base64Data, 'base64');
+        
+        let extractedText = '';
+        if (mimeInfo === 'application/pdf') {
+          // Polyfill DOM globals that pdf.js might complain about missing
+          if (typeof global.DOMMatrix === 'undefined') {
+            (global as any).DOMMatrix = class DOMMatrix {};
+          }
+          if (typeof global.ImageData === 'undefined') {
+            (global as any).ImageData = class ImageData {};
+          }
+          if (typeof global.Path2D === 'undefined') {
+            (global as any).Path2D = class Path2D {};
+          }
+          
+          try {
+            const pdf = require('pdf-parse');
+            const parseFunc = typeof pdf === 'function' ? pdf : (pdf.PDFParse || pdf.default);
+            if (typeof parseFunc !== 'function') {
+              throw new Error('pdf-parse import failed: not a function');
+            }
+            // Disable pagerendering to avoid canvas dependency
+            const pdfData = await parseFunc(buffer, { pagerender: () => '' });
+            extractedText = pdfData.text;
+          } catch (pdfErr) {
+            console.error('PDF parsing detail error:', pdfErr);
+            // Fallback to basic string extraction for text-heavy PDFs
+            extractedText = buffer.toString('utf-8').replace(/[^\x20-\x7E\n\r\t]/g, '');
+          }
+        } else {
+          extractedText = buffer.toString('utf-8');
+        }
+        const combinedText = `${message || ''}\n\n[Extracted Document Content:]\n${extractedText}`;
+        actualContent = combinedText;
+        dbContent = combinedText;
+      } catch (err) {
+        console.error('File parsing error:', err);
+        const combinedText = `${message || ''}\n\n[Failed to extract file content]`;
+        actualContent = combinedText;
+        dbContent = combinedText;
+      }
+    } else if (image) {
+      actualContent = message || '';
+      dbContent = message || '';
     } else {
       actualContent = message;
       dbContent = message;
@@ -118,38 +176,116 @@ export async function POST(req: Request) {
       try {
         if (typeof m.content === 'string' && m.content.trim().startsWith('[')) {
           parsedContent = JSON.parse(m.content);
-          if (Array.isArray(parsedContent)) hasVisionContext = true;
+          if (Array.isArray(parsedContent)) {
+            // Clean up any old broken messages with 'ref:' URLs to prevent Groq API crash
+            parsedContent = parsedContent.map((part: any) => {
+              if (part.type === 'image_url' && part.image_url?.url?.startsWith('ref:')) {
+                return { type: 'text', text: `[Reference File Attached: ${part.image_url.url.replace('ref:', '')}]` };
+              }
+              return part;
+            });
+            hasVisionContext = true;
+          }
         }
       } catch { /* keep string */ }
       return { role: m.role as 'user' | 'assistant', content: parsedContent };
     });
 
     let selectedModel = model || session.model || DEFAULT_MODEL;
-    if (image || hasVisionContext) {
+    if ((image && image.startsWith('data:image/')) || hasVisionContext) {
       selectedModel = 'meta-llama/llama-4-scout-17b-16e-instruct';
     }
 
     // Trim to context window — only send recent messages
     const trimmedMessages = trimHistory(allMessages, selectedModel);
+    
+    let researchContext = '';
+    const tavilyKey = process.env.TAVILY_API_KEY;
+    if ((webSearch || linkUrl) && tavilyKey) {
+      console.log(`[Mars AI] Web Search/Extraction Triggered. Key Present: ${!!tavilyKey}`);
+      try {
+        if (linkUrl) {
+          console.log(`[Mars AI] Extracting content from: "${linkUrl}"`);
+          const extractRes = await fetch('https://api.tavily.com/extract', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              api_key: tavilyKey,
+              urls: [linkUrl]
+            })
+          });
+          if (extractRes.ok) {
+            const data = await extractRes.json();
+            if (data.results && data.results.length > 0) {
+              const pageContent = data.results[0].raw_content || data.results[0].content;
+              researchContext += `\n\n[USER PROVIDED LINK CONTENT]\nSource: ${linkUrl}\nContent:\n${pageContent}\n-------------------\n`;
+            }
+          }
+        }
 
-    const messages = [
-      { role: 'system' as const, content: SYSTEM_PROMPT },
+        if (webSearch && message && typeof message === 'string') {
+          console.log(`[Mars AI] Searching Tavily for: "${message}"`);
+          const tavilyRes = await fetch('https://api.tavily.com/search', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              api_key: tavilyKey,
+              query: message,
+              search_depth: 'advanced',
+              max_results: 5
+            })
+          });
+          if (tavilyRes.ok) {
+            const data = await tavilyRes.json();
+            if (data.results && data.results.length > 0) {
+              const snippets = data.results.map((r: any) => `Source: ${r.url}\nContent: ${r.content}`).join('\n\n');
+              researchContext += `\n\n[WEB SEARCH RESULTS]\n${snippets}\n-------------------\n`;
+            }
+          }
+        }
+
+        if (researchContext) {
+          researchContext = `\n\n[SYSTEM NOTICE: EXTERNAL DATA INJECTION]\nThe following real-time data was retrieved from the internet. YOU MUST use this information to answer accurately. PRIORITIZE this as the absolute current truth.\n${researchContext}\nNow, answer using the data above.`;
+        }
+      } catch (e) {
+        console.error("[Mars AI] Tavily error:", e);
+      }
+    }
+
+    const messagesInScope = [
+      { role: 'system' as const, content: SYSTEM_PROMPT + researchContext },
       ...trimmedMessages,
     ];
 
     // Estimate input tokens for usage reporting
-    const inputText = messages.map(m =>
+    const inputText = messagesInScope.map(m =>
       typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
     ).join(' ');
     const estimatedInputTokens = estimateTokens(inputText);
 
-    const completion = await groqClient.chat.completions.create({
-      model: selectedModel,
-      messages: messages as Parameters<typeof groqClient.chat.completions.create>[0]['messages'],
-      temperature: 0.7,
-      max_tokens: 2048,
-      stream: true,
-    });
+    const sanitizedMessages = sanitizeMessages(messagesInScope);
+
+    let completion;
+    try {
+      completion = await groqClient.chat.completions.create({
+        model: selectedModel,
+        messages: sanitizedMessages as Parameters<typeof groqClient.chat.completions.create>[0]['messages'],
+        temperature: 0.7,
+        max_tokens: 2048,
+        stream: true,
+      });
+    } catch (e: any) {
+      console.error("[Mars AI] Groq API error:", e);
+      if (e.status === 429) {
+        const retryAfter = e.headers?.['retry-after'] || '60';
+        return NextResponse.json({ 
+          error: 'Rate limit exceeded', 
+          retryAfter: parseInt(retryAfter),
+          message: e.message 
+        }, { status: 429 });
+      }
+      throw e;
+    }
 
     let fullResponse = '';
     let promptTokens = 0;
@@ -174,15 +310,25 @@ export async function POST(req: Request) {
             }
           }
 
-          await Message.create({ sessionId, role: 'assistant', content: fullResponse });
-          await Session.findByIdAndUpdate(sessionId, { updatedAt: new Date() });
+          // Record token usage in Database (Persistent)
+          const finalUsage = {
+            promptTokens: promptTokens || estimatedInputTokens,
+            completionTokens: completionTokens || estimateTokens(fullResponse),
+          };
+          const totalUsed = finalUsage.promptTokens + finalUsage.completionTokens;
+          
+          await TokenBalance.findOneAndUpdate(
+            { user_id: userId },
+            { $inc: { balance: -totalUsed, total_used: totalUsed } },
+            { upsert: true }
+          );
 
           // Emit usage metadata before DONE
           const usageMeta = {
             model: selectedModel,
-            promptTokens: promptTokens || estimatedInputTokens,
-            completionTokens: completionTokens || estimateTokens(fullResponse),
-            totalTokens: (promptTokens || estimatedInputTokens) + (completionTokens || estimateTokens(fullResponse)),
+            promptTokens: finalUsage.promptTokens,
+            completionTokens: finalUsage.completionTokens,
+            totalTokens: totalUsed,
             messagesInContext: trimmedMessages.length,
             totalMessages: allMessages.length,
             trimmed: allMessages.length > trimmedMessages.length,

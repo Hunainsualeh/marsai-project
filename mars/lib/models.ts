@@ -4,6 +4,7 @@ export const AVAILABLE_MODELS = [
   {
     id: 'llama-3.3-70b-versatile',
     name: 'Llama 3.3 70B',
+    shortName: 'Logic Core',
     badge: 'Logic Core',
     description: 'Best for deep reasoning, code, and complex tasks',
     color: '#60A5FA',
@@ -14,6 +15,7 @@ export const AVAILABLE_MODELS = [
   {
     id: 'llama-3.1-8b-instant',
     name: 'Llama 3.1 8B',
+    shortName: 'Reflex',
     badge: 'Reflex',
     description: 'Best for fast replies, quick Q&A, and lightweight tasks',
     color: '#FCD34D',
@@ -24,6 +26,7 @@ export const AVAILABLE_MODELS = [
   {
     id: 'mixtral-8x7b-32768',
     name: 'Mixtral 8x7B',
+    shortName: 'Nexus',
     badge: 'Nexus',
     description: 'Best for long contexts, multilingual tasks, and balanced output',
     color: '#C084FC',
@@ -34,6 +37,7 @@ export const AVAILABLE_MODELS = [
   {
     id: 'gemma2-9b-it',
     name: 'Gemma 2 9B',
+    shortName: 'Polymath',
     badge: 'Polymath',
     description: 'Best for instruction following, structured output, and efficiency',
     color: '#34D399',
@@ -44,6 +48,7 @@ export const AVAILABLE_MODELS = [
   {
     id: 'meta-llama/llama-4-scout-17b-16e-instruct',
     name: 'Llama 4 Scout',
+    shortName: 'Visionary',
     badge: 'Visionary',
     description: 'Best for image analysis and multimodal tasks. Can SEE images.',
     color: '#FB7185',

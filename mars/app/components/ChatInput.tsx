@@ -1,13 +1,16 @@
 'use client';
 
 import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { ArrowUp, Square, Check, Zap, Cpu, Sparkles, Eye, Layers, Image, FileText, File, X, PenLine, Monitor } from 'lucide-react';
+import { ArrowUp, Square, Check, Zap, Cpu, Sparkles, Eye, Layers, Image as ImageIcon, FileText, File, X, PenLine, Monitor, Globe } from 'lucide-react';
 import { AVAILABLE_MODELS } from '@/lib/models';
 import { motion, AnimatePresence } from 'framer-motion';
 import dynamic from 'next/dynamic';
 
 // Lazy-load the canvas drawer so it doesn't bloat the initial bundle
-const CanvasDrawer = dynamic(() => import('./CanvasDrawer'), { ssr: false });
+const CanvasDrawer = dynamic(() => import('./CanvasDrawer').catch(err => {
+  console.error("Failed to load CanvasDrawer", err);
+  return () => null;
+}), { ssr: false });
 
 interface ChatInputProps {
   inputValue?: string;
@@ -24,6 +27,10 @@ interface ChatInputProps {
   onModelChange?: (modelId: string) => void;
   codeCanvasMode?: boolean;
   onToggleCodeCanvas?: () => void;
+  webSearchMode?: boolean;
+  onToggleWebSearch?: () => void;
+  linkUrl?: string;
+  setLinkUrl?: (url: string) => void;
 }
 
 const ChatInput: React.FC<ChatInputProps> = ({
@@ -41,6 +48,10 @@ const ChatInput: React.FC<ChatInputProps> = ({
   onModelChange = () => { },
   codeCanvasMode = false,
   onToggleCodeCanvas,
+  webSearchMode = false,
+  onToggleWebSearch,
+  linkUrl = '',
+  setLinkUrl = () => { },
 }) => {
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [showCanvas, setShowCanvas] = useState(false);
@@ -90,7 +101,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
   const attachOptions = [
     {
       label: 'Image', sub: 'JPG, PNG, WEBP, GIF',
-      icon: <Image size={14} className="text-blue-400" />,
+      icon: <ImageIcon size={14} className="text-blue-400" />,
       action: () => openFilePicker('image/*'),
     },
     {
@@ -143,6 +154,31 @@ const ChatInput: React.FC<ChatInputProps> = ({
             </motion.div>
           )}
         </AnimatePresence>
+        
+        {/* Link Input Field */}
+        <AnimatePresence>
+          {linkUrl && (
+            <motion.div
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 6 }}
+              className="mb-2 flex items-center gap-2 px-1"
+            >
+              <div className="flex items-center gap-2 bg-blue-500/10 border border-blue-500/20 rounded-xl px-3 py-1.5 max-w-full">
+                <Globe size={14} className="text-blue-400" />
+                <span className="text-[11px] text-blue-300 font-medium truncate max-w-[250px]">
+                  {linkUrl}
+                </span>
+                <button
+                  onClick={() => setLinkUrl('')}
+                  className="p-1 rounded-full hover:bg-blue-500/20 text-blue-400/60 hover:text-blue-300 transition-all"
+                >
+                  <X size={11} />
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Input Pill */}
         <motion.form
@@ -155,7 +191,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
             if (isStreaming) onStop();
             else if (safeValue.trim() || attachment) onSend();
           }}
-          className={`relative flex items-end gap-1 sm:gap-2 p-1.5 bg-[#141414] rounded-[28px] border transition-all duration-300 ease-out w-full ${hasContent ? 'border-white/25' : 'border-white/8'
+          className={`relative flex items-center gap-1 p-1.5 bg-[#141414] rounded-[28px] border transition-all duration-300 ease-out w-full min-h-[50px] ${hasContent ? 'border-white/20 shadow-[0_0_20px_rgba(255,255,255,0.02)]' : 'border-white/5'
             }`}
         >
           {/* Attachment Button */}
@@ -163,9 +199,9 @@ const ChatInput: React.FC<ChatInputProps> = ({
             <button
               type="button"
               onClick={() => { setShowAttachMenu(!showAttachMenu); }}
-              className={`p-2 rounded-full transition-colors ${showAttachMenu ? 'text-white bg-white/10' : 'text-white/30 hover:text-white/70 hover:bg-white/5'}`}
+              className={`flex items-center justify-center h-8 w-8 sm:h-9 sm:w-9 rounded-full transition-all ${showAttachMenu ? 'text-white bg-white/10' : 'text-white/25 hover:text-white/70 hover:bg-white/5'}`}
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="sm:scale-110">
                 <line x1="12" y1="5" x2="12" y2="19" />
                 <line x1="5" y1="12" x2="19" y2="12" />
               </svg>
@@ -204,20 +240,32 @@ const ChatInput: React.FC<ChatInputProps> = ({
             </AnimatePresence>
           </div>
 
-          {/* Code Canvas Toggle — always visible */}
-          <button
-            type="button"
-            onClick={handleToggleCanvas}
-            title={isCanvasMode
-              ? 'Code Canvas ON — code responses auto-preview. Click to disable.'
-              : 'Code Canvas — enable live preview for code responses'}
-            className={`p-2 rounded-full transition-all shrink-0 border ${isCanvasMode
-                ? 'text-emerald-400 bg-emerald-400/10 border-emerald-400/25 hover:bg-emerald-400/20'
-                : 'text-white/30 border-transparent hover:text-white/60 hover:bg-white/5 hover:border-white/10'
-              }`}
-          >
-            <Monitor size={15} />
-          </button>
+          {/* Model Intelligence Toolbar */}
+          <div className="flex items-center gap-0.5 sm:gap-1 border-white/5 sm:border-x px-1 sm:px-1.5 mx-0.5">
+            <button
+              type="button"
+              onClick={handleToggleCanvas}
+              title="Toggle Code Preview"
+              className={`flex items-center justify-center h-8 w-8 rounded-full transition-all shrink-0 border ${isCanvasMode
+                  ? 'text-emerald-400 bg-emerald-400/10 border-emerald-400/25'
+                  : 'text-white/20 border-transparent hover:text-white/60 hover:bg-white/5'
+                }`}
+            >
+              <Monitor size={14} />
+            </button>
+
+            <button
+              type="button"
+              onClick={onToggleWebSearch}
+              title="Toggle Web Search"
+              className={`flex items-center justify-center h-8 w-8 rounded-full transition-all shrink-0 border ${webSearchMode
+                  ? 'text-blue-400 bg-blue-400/10 border-blue-400/25'
+                  : 'text-white/20 border-transparent hover:text-white/60 hover:bg-white/5'
+                }`}
+            >
+              <Globe size={14} />
+            </button>
+          </div>
 
           {/* Text Input */}
           <textarea
@@ -234,8 +282,24 @@ const ChatInput: React.FC<ChatInputProps> = ({
                 if (!isStreaming && (safeValue.trim() || attachment)) onSend();
               }
             }}
-            placeholder="Send message..."
-            className="flex-1 min-w-0 bg-transparent border-none text-[#E0E0E0] text-sm placeholder-white/20 outline-none ring-0 focus:ring-0 focus:outline-none py-2 px-1 resize-none leading-relaxed overflow-y-auto"
+            onPaste={(e) => {
+              const pastedText = e.clipboardData.getData('text');
+              const urlRegex = /(https?:\/\/[^\s]+)/g;
+              const matches = pastedText.match(urlRegex);
+              if (matches && matches.length > 0 && !linkUrl) {
+                const firstUrl = matches[0];
+                setLinkUrl(firstUrl);
+                // If the entire pasted text is just the URL, clear the textarea
+                if (pastedText.trim() === firstUrl) {
+                  e.preventDefault();
+                } else {
+                  // If it's a mix, let it paste but maybe strip it? 
+                  // For now, just let it paste other text if it's there.
+                }
+              }
+            }}
+            placeholder="Send message to Mars AI..."
+            className="flex-1 min-w-0 bg-transparent border-none text-[#E0E0E0] text-sm placeholder-white/20 outline-none ring-0 focus:ring-0 focus:outline-none py-2.5 px-2 resize-none leading-normal overflow-y-auto"
           />
 
           {/* Send / Stop */}
@@ -243,20 +307,20 @@ const ChatInput: React.FC<ChatInputProps> = ({
             <button
               type="button"
               onClick={onStop}
-              className="shrink-0 p-2.5 rounded-full bg-white text-black transition-all"
+              className="flex items-center justify-center h-8 w-8 sm:h-9 sm:w-9 shrink-0 rounded-full bg-white text-black transition-all"
             >
-              <Square size={16} fill="currentColor" />
+              <Square size={12} fill="currentColor" className="sm:scale-110" />
             </button>
           ) : (
             <button
               type="submit"
               disabled={!safeValue.trim() && !attachment}
-              className={`shrink-0 p-2.5 rounded-full transition-all duration-300 ${hasContent
+              className={`flex items-center justify-center h-8 w-8 sm:h-9 sm:w-9 shrink-0 rounded-full transition-all duration-300 ${hasContent
                   ? 'bg-white text-black rotate-0 scale-100'
-                  : 'bg-white/10 text-white/25 rotate-[-45deg] scale-90 opacity-50'
+                  : 'bg-white/10 text-white/20 rotate-[-45deg] scale-90 opacity-40'
                 }`}
             >
-              <ArrowUp size={17} strokeWidth={3} />
+              <ArrowUp size={14} strokeWidth={3} className="sm:scale-110" />
             </button>
           )}
         </motion.form>

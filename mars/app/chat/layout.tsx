@@ -67,7 +67,7 @@ function ChatLayoutInner({ children }: { children: React.ReactNode }) {
 
       <main className="flex-1 flex flex-col min-w-0 relative">
         {/* Floating Header — Home Link (top-right) + Model Selector (top-left) */}
-        <div className="absolute top-4 right-6 z-30">
+        <div className="absolute top-4 right-6 z-50">
           <Link
             href="/"
             className="flex items-center gap-2 px-3 py-1.5 bg-[#111]/80 backdrop-blur-md border border-[#222] rounded-full text-[11px] font-bold uppercase tracking-widest text-[#888] hover:text-white hover:border-[#333] transition-all"
@@ -78,7 +78,7 @@ function ChatLayoutInner({ children }: { children: React.ReactNode }) {
         </div>
 
         {/* Model Selector — top-left floating, spaced to avoid sidebar toggle */}
-        <div ref={modelRef} className="absolute top-4 left-16 lg:left-4 z-30 transition-all duration-300">
+        <div ref={modelRef} className={`absolute top-4 ${sidebarOpen ? 'left-4' : 'left-[72px]'} z-50 transition-all duration-300`}>
           <button
             onClick={() => setShowModelSelector(!showModelSelector)}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-[11px] font-black uppercase tracking-widest transition-all backdrop-blur-md ${
@@ -154,6 +154,7 @@ function ChatLayoutInner({ children }: { children: React.ReactNode }) {
             onModelChange: setCurrentModel,
             inputStyle,
             sidebarOpen,
+            onOpenSettings: () => setSettingsOpen(true),
           })
           : children}
       </main>

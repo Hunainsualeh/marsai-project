@@ -3,6 +3,7 @@ import { Inter } from "next/font/google";
 import { Geist_Mono } from "next/font/google";
 import "./globals.css";
 import Preloader from "./components/Preloader";
+import { AuthProvider } from "./components/AuthProvider";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -16,7 +17,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Mars AI — Unfiltered Intelligence",
+  title: "Mars AI",
   description: "A sovereign reasoning engine built for radical honesty and unrestricted human inquiry. No filters. No walls. Powered by Groq.",
   icons: {
     icon: '/mars-logo.svg',
@@ -33,8 +34,10 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${inter.variable} ${geistMono.variable} dark`}>
       <body className="min-h-dvh bg-background text-foreground antialiased font-sans overflow-x-hidden">
-        <Preloader />
-        {children}
+        <AuthProvider>
+          <Preloader />
+          {children}
+        </AuthProvider>
       </body>
     </html>
   );

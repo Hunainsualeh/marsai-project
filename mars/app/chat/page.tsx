@@ -15,7 +15,11 @@ import {
   Loader2,
   ArrowLeft,
   X,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Copy,
+  Check,
+  Edit2,
+  AlertTriangle
 } from 'lucide-react';
 import Link from 'next/link';
 import ChatInput from '@/app/components/ChatInput';
@@ -25,8 +29,11 @@ import AnimatedMars from '@/app/components/AnimatedMars';
 import Marquee from '@/app/components/marquee';
 import UsageModal from '@/app/components/UsageModal';
 import { TokenTracker } from '@/app/components/TokenTracker';
-import { AVAILABLE_MODELS } from '@/lib/models';
 import DynamicText from '@/app/components/DynamicText';
+import WelcomeModal from '@/app/components/WelcomeModal';
+import { useAuth } from '@/lib/useAuth';
+import { AVAILABLE_MODELS, DEFAULT_MODEL } from '@/lib/models';
+import ThrottledAlert from '@/app/components/ThrottledAlert';
 
 const BG_COLOR = "#000000";
 const GRID_STYLE = {
@@ -72,16 +79,20 @@ function ChatPageInner({
   inputStyle,
   sidebarOpen = false,
   onModelChange = () => { },
+  onOpenSettings = () => { },
 }: {
   currentModel?: string;
   inputStyle?: string;
   sidebarOpen?: boolean;
   onModelChange?: (modelId: string) => void;
+  onOpenSettings?: () => void;
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const sessionId = searchParams.get('s');
+  const { user } = useAuth();
 
+  const [webSearchMode, setWebSearchMode] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [attachment, setAttachment] = useState<string | null>(null);
@@ -89,6 +100,9 @@ function ChatPageInner({
   const [isStreaming, setIsStreaming] = useState(false);
   const [loadingSession, setLoadingSession] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
+  const [linkUrl, setLinkUrl] = useState('');
+  const [lowTokens, setLowTokens] = useState(false);
 
   const [error, setError] = useState<{ message: string; type?: string; code?: string } | null>(null);
   const [countdown, setCountdown] = useState<number>(0);
@@ -100,6 +114,9 @@ function ChatPageInner({
   const lastFailedMsgRef = useRef<string>(''); // stores text of last rate-limited message
 
   const [codeCanvasMode, setCodeCanvasMode] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editContent, setEditContent] = useState('');
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const scrollToBottom = useCallback(() => {
     if (scrollRef.current) {
@@ -196,7 +213,7 @@ function ChatPageInner({
         const img = new Image();
         img.onload = () => {
           const canvas = document.createElement('canvas');
-          const maxSize = 800;
+          const maxSize = 1200; // Increased for better clarity
           let width = img.width;
           let height = img.height;
           if (width > height) {
@@ -208,14 +225,18 @@ function ChatPageInner({
           canvas.height = height;
           const ctx = canvas.getContext('2d');
           ctx?.drawImage(img, 0, 0, width, height);
-          setAttachment(canvas.toDataURL('image/jpeg', 0.8));
+          setAttachment(canvas.toDataURL('image/jpeg', 0.85));
         };
         img.src = e.target?.result as string;
       };
       reader.readAsDataURL(file);
     } else {
-      // Non-image: store file name as context marker
-      setAttachment(`file:${file.name}`);
+      // Non-image: read as data URL so backend can parse it
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        setAttachment(e.target?.result as string);
+      };
+      reader.readAsDataURL(file);
     }
   };
 
@@ -251,6 +272,10 @@ function ChatPageInner({
     const text = overridePrompt || input.trim();
     if ((!text && !attachment) || isStreaming) return;
 
+    if (webSearchMode) {
+      setIsSearching(true);
+    }
+
     setError(null);
     setIsStreaming(true); // Move this up to prevent duplicate clicks during setup
     let currentSessionId = sessionId;
@@ -278,19 +303,24 @@ function ChatPageInner({
       }
     }
 
+    const isImage = attachment?.startsWith('data:image/');
     const userMsg: ChatMessage = {
       _id: `temp-${Date.now()}`,
       role: 'user',
       content: attachment
-        ? JSON.stringify([{ type: 'text', text }, { type: 'image_url', image_url: { url: attachment } }])
+        ? (isImage
+          ? JSON.stringify([{ type: 'text', text }, { type: 'image_url', image_url: { url: attachment } }])
+          : `${text}\n\n[Reference File Attached: ${attachmentName || 'Document'}]`)
         : text,
       createdAt: new Date().toISOString(),
     };
     setMessages((prev) => [...prev, userMsg]);
     setInput('');
     const sentAttachment = attachment;
+    const sentLinkUrl = linkUrl;
     setAttachment(null);
     setAttachmentName(null);
+    setLinkUrl('');
 
     const assistantId = `temp-${Date.now() + 1}`;
     setMessages((prev) => [
@@ -310,6 +340,8 @@ function ChatPageInner({
           image: sentAttachment,
           sessionId: currentSessionId,
           model: currentModel,
+          webSearch: webSearchMode,
+          linkUrl: sentLinkUrl,
         }),
         signal: controller.signal,
       });
@@ -323,24 +355,13 @@ function ChatPageInner({
         }
 
         if (res.status === 429) {
-          const msg = errData.error || '';
-          const mMatch = msg.match(/(\d+)m/);
-          const sMatch = msg.match(/(\d+\.?\d*)s/);
-          const m = mMatch ? parseInt(mMatch[1]) : 0;
-          const s = sMatch ? parseFloat(sMatch[1]) : 0;
-          const totalSecs = m * 60 + Math.ceil(s);
-
-          setCountdown(totalSecs > 0 ? totalSecs : 60);
+          const retryAfter = errData.retryAfter || 60;
+          setCountdown(retryAfter);
           setError({
-            message: msg || 'Rate limit reached. Please wait a moment.',
+            message: errData.message || 'Rate limit reached.',
             type: 'rate_limit',
-            code: errData.code,
           });
-
-          // Store failed message so model-switch can auto-retry
           lastFailedMsgRef.current = text;
-
-          // Remove the blank assistant bubble — don't show 'Sorry'
           setMessages(prev => prev.filter(m => m._id !== assistantId));
         }
         throw new Error(errData.error || `API error: ${res.status}`);
@@ -367,6 +388,7 @@ function ChatPageInner({
             try {
               const parsed = JSON.parse(data);
               if (parsed.content) {
+                if (isSearching) setIsSearching(false);
                 setMessages((prev) =>
                   prev.map((m) =>
                     m._id === assistantId
@@ -386,6 +408,15 @@ function ChatPageInner({
       // Record token usage in tracker
       if (usageMeta.model && usageMeta.totalTokens) {
         TokenTracker.addUsage(usageMeta.model, usageMeta.totalTokens);
+        // Check for low tokens in DB
+        try {
+          const tRes = await fetch('/api/user/tokens');
+          if (tRes.ok) {
+            const tData = await tRes.json();
+            if (tData.balance < 5000) setLowTokens(true);
+            else setLowTokens(false);
+          }
+        } catch { /* ignore */ }
       }
       window.dispatchEvent(new CustomEvent('mars:refresh-sessions'));
     } catch (err) {
@@ -403,12 +434,42 @@ function ChatPageInner({
       );
     } finally {
       setIsStreaming(false);
+      setIsSearching(false);
       abortRef.current = null;
     }
   };
 
   const handleStop = () => {
     abortRef.current?.abort();
+  };
+
+  const handleCopy = (id: string, text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
+  };
+
+  const handleEdit = (msg: ChatMessage) => {
+    setEditingId(msg._id);
+    setEditContent(msg.content);
+  };
+
+  const handleSaveEdit = async (id: string) => {
+    if (!editContent.trim()) return;
+
+    // Optimistic update
+    setMessages(prev => prev.map(m => m._id === id ? { ...m, content: editContent } : m));
+    setEditingId(null);
+
+    try {
+      await fetch(`/api/messages/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: editContent }),
+      });
+    } catch (err) {
+      console.error('Failed to save edit:', err);
+    }
   };
 
   const handleQuickPrompt = (prompt: string) => {
@@ -446,8 +507,8 @@ function ChatPageInner({
         >
           <AnimatedMars />
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-center mb-0">
-            <h1 className="text-3xl md:text-5xl font-black text-transparent bg-clip-text bg-gradient-to-br from-white to-[#555] tracking-tight mb-3">
-              MARS AI
+            <h1 className="text-3xl md:text-5xl font-black text-transparent bg-clip-text bg-gradient-to-br from-white to-[#555] tracking-tight mb-3 uppercase">
+              WELCOME {user?.displayName || user?.email?.split('@')[0] || 'USER'}
             </h1>
             <DynamicText size="md" interval={2200} className="max-w-sm mx-auto" />
           </motion.div>
@@ -472,36 +533,20 @@ function ChatPageInner({
 
           <AnimatePresence>
             {error && error.type === 'rate_limit' && (
-              <motion.div
-                initial={{ opacity: 0, y: 12, scale: 0.95 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: 12, scale: 0.95 }}
-                className="w-full max-w-3xl mb-4 relative px-4"
-              >
-                <div className="flex items-center justify-between gap-4 p-4 bg-[#0A0A0A] border border-[#F59E0B]/30 rounded-full shadow-[0_20px_50px_-20px_rgba(245,158,11,0.2)] backdrop-blur-2xl">
-                  <div className="flex items-center gap-3 px-2 flex-1">
-                    <div className="w-8 h-8 rounded-full bg-[#F59E0B]/10 flex items-center justify-center border border-[#F59E0B]/20">
-                      <Bot size={16} className="text-[#F59E0B]" />
-                    </div>
-                    <p className="text-xs md:text-sm text-[#888] font-medium leading-tight">
-                      Mission throttled. Resume with full model in <span className="text-white font-bold">{formatTime(countdown)}</span>.
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2 pr-2">
-                    <button
-                      onClick={() => setError(null)}
-                      className="px-4 py-1.5 bg-[#F59E0B]/10 hover:bg-[#F59E0B]/20 border border-[#F59E0B]/20 rounded-full text-[10px] font-bold text-[#F59E0B] uppercase tracking-widest transition-all"
-                    >
-                      Dismiss
-                    </button>
-                    <button onClick={() => setError(null)} className="p-2 text-[#444] hover:text-white transition-colors">
-                      <X size={16} />
-                    </button>
-                  </div>
-                </div>
-                {/* Visual Connection Pin */}
-                <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 w-1 h-3 bg-[#F59E0B]/20 rounded-full blur-[1px]" />
-              </motion.div>
+              <ThrottledAlert
+                retryAfter={countdown}
+                onClose={() => setError(null)}
+                currentModel={currentModel || DEFAULT_MODEL}
+                onSwitchModel={(modelId: string) => {
+                  setError(null);
+                  onModelChange(modelId);
+                  // Auto-retry with the new model
+                  if (lastFailedMsgRef.current) {
+                    handleSend(lastFailedMsgRef.current);
+                    lastFailedMsgRef.current = '';
+                  }
+                }}
+              />
             )}
           </AnimatePresence>
 
@@ -568,8 +613,15 @@ function ChatPageInner({
                   attachment={attachment}
                   onRemoveAttachment={() => setAttachment(null)}
                   onFileSelect={processImageFile}
+                  onCanvasAttach={handleCanvasAttach}
                   currentModel={currentModel}
                   onModelChange={onModelChange}
+                  codeCanvasMode={codeCanvasMode}
+                  onToggleCodeCanvas={() => setCodeCanvasMode((v: boolean) => !v)}
+                  webSearchMode={webSearchMode}
+                  onToggleWebSearch={() => setWebSearchMode((v: boolean) => !v)}
+                  linkUrl={linkUrl}
+                  setLinkUrl={setLinkUrl}
                 />
               )}
             </div>
@@ -588,8 +640,39 @@ function ChatPageInner({
     <div className="flex flex-col h-full overflow-hidden relative" style={{ backgroundColor: BG_COLOR }}>
       <div className="absolute inset-0 opacity-[0.02] pointer-events-none" style={GRID_STYLE}></div>
       <Timeline nodes={timelineNodes} onNodeClick={scrollToMessage} />
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 pt-20 pb-20 md:px-0">
-        <div className="max-w-3xl mx-auto space-y-6">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto overflow-x-hidden px-4 pt-20 pb-20 md:px-0">
+
+             {/* Low Token Alert Banner */}
+             <AnimatePresence>
+               {lowTokens && (
+                 <motion.div
+                   initial={{ opacity: 0, y: 10 }}
+                   animate={{ opacity: 1, y: 0 }}
+                   exit={{ opacity: 0, y: 10 }}
+                   className="fixed bottom-32 left-1/2 -translate-x-1/2 z-[60] w-[90%] max-w-md"
+                 >
+                   <div className="bg-red-500/10 backdrop-blur-md border border-red-500/20 p-4 rounded-2xl flex items-center justify-between gap-4">
+                     <div className="flex items-center gap-3">
+                       <div className="w-8 h-8 bg-red-500/10 rounded-lg flex items-center justify-center shrink-0">
+                         <AlertTriangle size={16} className="text-red-500" />
+                       </div>
+                       <div>
+                         <div className="text-[10px] font-black uppercase tracking-widest text-red-500/60">Neural Depletion</div>
+                         <div className="text-xs font-bold text-white/80 mt-0.5">Tokens are running low. Action required.</div>
+                       </div>
+                     </div>
+                     <button
+                       onClick={() => onOpenSettings()}
+                       className="px-3 py-1.5 bg-red-500/20 hover:bg-red-500/30 text-red-500 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all"
+                     >
+                       Upgrade
+                     </button>
+                   </div>
+                 </motion.div>
+               )}
+             </AnimatePresence>
+
+             <div className="max-w-3xl mx-auto space-y-6">
           {loadingSession ? (
             <div className="flex items-center justify-center py-20">
               <Loader2 size={24} className="animate-spin text-[#333]" />
@@ -610,38 +693,78 @@ function ChatPageInner({
                       <Bot size={15} className="text-[#555]" />
                     </div>
                   )}
-                  <div className={`max-w-[85%] text-sm leading-relaxed ${msg.role === 'user' ? 'bg-[#E0E0E0] text-[#0A0A0A] rounded-2xl rounded-tr-md px-5 py-3.5' : 'bg-transparent text-[#D0D0D0] rounded-2xl w-full'}`}>
+                  <div className={`max-w-[85%] relative group text-sm leading-relaxed ${msg.role === 'user' ? 'bg-[#E0E0E0] text-[#0A0A0A] rounded-2xl rounded-tr-md px-5 py-3.5' : 'bg-transparent text-[#D0D0D0] rounded-2xl w-full'}`}>
+                    {/* Message Actions */}
+                    <div className={`absolute top-0 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200 z-10 ${msg.role === 'user' ? '-left-12 flex-row-reverse' : '-right-12'}`}>
+                      <button
+                        onClick={() => handleCopy(msg._id, msg.content)}
+                        className="p-1.5 rounded-lg bg-[#111] border border-[#222] text-[#555] hover:text-white transition-colors"
+                        title="Copy text"
+                      >
+                        {copiedId === msg._id ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+                      </button>
+                      {msg.role === 'user' && (
+                        <button
+                          onClick={() => handleEdit(msg)}
+                          className="p-1.5 rounded-lg bg-[#111] border border-[#222] text-[#555] hover:text-white transition-colors"
+                          title="Edit message"
+                        >
+                          <Edit2 size={12} />
+                        </button>
+                      )}
+                    </div>
+
                     {msg.role === 'assistant' ? (
-                      msg.content ? <MarkdownRenderer content={msg.content} canvasMode={codeCanvasMode} /> : (
-                        <span className="flex items-center gap-1.5 h-[52px]">
-                          <span className="w-1.5 h-1.5 bg-[#333] rounded-full animate-bounce" />
-                          <span className="w-1.5 h-1.5 bg-[#333] rounded-full animate-bounce [animation-delay:0.1s]" />
-                          <span className="w-1.5 h-1.5 bg-[#333] rounded-full animate-bounce [animation-delay:0.2s]" />
+                      msg.content ? (
+                        <div className="w-full overflow-hidden">
+                          <MarkdownRenderer content={msg.content} canvasMode={codeCanvasMode} />
+                        </div>
+                      ) : (
+                        <span className="flex items-center gap-1.5 h-[1.5em] py-4">
+                          <span className="w-1 h-1 bg-white/20 rounded-full animate-bounce [animation-delay:-0.3s]" />
+                          <span className="w-1 h-1 bg-white/20 rounded-full animate-bounce [animation-delay:-0.15s]" />
+                          <span className="w-1 h-1 bg-white/20 rounded-full animate-bounce" />
                         </span>
                       )
                     ) : (
-                      (() => {
-                        // Render user messages — detect image attachment JSON
-                        try {
-                          if (msg.content.trim().startsWith('[')) {
-                            const parsed = JSON.parse(msg.content);
-                            if (Array.isArray(parsed)) {
-                              return (
-                                <div className="space-y-2">
-                                  {parsed.map((item: { type: string; text?: string; image_url?: { url: string } }, i: number) => {
-                                    if (item.type === 'image_url' && item.image_url) return (
-                                      <img key={i} src={item.image_url.url} alt="Attachment" className="max-w-[220px] rounded-xl border border-black/10 shadow-md block" />
-                                    );
-                                    if (item.type === 'text' && item.text) return <div key={i}>{item.text}</div>;
-                                    return null;
-                                  })}
-                                </div>
-                              );
+                      editingId === msg._id ? (
+                        <div className="flex flex-col gap-2 min-w-[200px]">
+                          <textarea
+                            value={editContent}
+                            onChange={(e) => setEditContent(e.target.value)}
+                            autoFocus
+                            className="w-full bg-black/5 border-none text-[#0A0A0A] text-sm resize-none outline-none leading-relaxed p-0 scrollbar-none"
+                            rows={Math.max(1, editContent.split('\n').length)}
+                          />
+                          <div className="flex items-center justify-end gap-2 pt-2 border-t border-black/5">
+                            <button onClick={() => setEditingId(null)} className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-black/40 hover:text-black">Cancel</button>
+                            <button onClick={() => handleSaveEdit(msg._id)} className="px-2 py-1 text-[10px] font-black uppercase tracking-wider bg-black text-white rounded-md">Save</button>
+                          </div>
+                        </div>
+                      ) : (
+                        (() => {
+                          // Render user messages — detect image attachment JSON
+                          try {
+                            if (msg.content.trim().startsWith('[')) {
+                              const parsed = JSON.parse(msg.content);
+                              if (Array.isArray(parsed)) {
+                                return (
+                                  <div className="space-y-2">
+                                    {parsed.map((item: { type: string; text?: string; image_url?: { url: string } }, i: number) => {
+                                      if (item.type === 'image_url' && item.image_url) return (
+                                        <img key={i} src={item.image_url.url} alt="Attachment" className="max-w-[220px] rounded-xl border border-black/10 shadow-md block" />
+                                      );
+                                      if (item.type === 'text' && item.text) return <div key={i}>{item.text}</div>;
+                                      return null;
+                                    })}
+                                  </div>
+                                );
+                              }
                             }
-                          }
-                        } catch { /* plain text fallback */ }
-                        return <div>{msg.content}</div>;
-                      })()
+                          } catch { /* plain text fallback */ }
+                          return <div>{msg.content}</div>;
+                        })()
+                      )
                     )}
                   </div>
                   {msg.role === 'user' && (
@@ -654,9 +777,25 @@ function ChatPageInner({
             </AnimatePresence>
           )}
           {isStreaming && (
-            <div className="flex items-center gap-2 text-[11px] text-[#444] font-mono uppercase tracking-[0.2em] pl-12 bg-gradient-to-r from-transparent via-[#F59E0B]/5 to-transparent py-2">
-              <Loader2 size={12} className="animate-spin text-[#F59E0B]" />
-              <span className="animate-pulse">Initializing Mission Protocols...</span>
+            <div className="flex items-center gap-2 text-[11px] text-[#444] font-mono uppercase tracking-[0.2em] pl-12 bg-gradient-to-r from-transparent via-white/[0.02] to-transparent py-3 border-y border-white/5">
+              <div className="relative">
+                <Loader2 size={12} className="animate-spin text-white/40" />
+                {isSearching && <div className="absolute inset-0 animate-ping rounded-full bg-blue-500/20" />}
+              </div>
+              <span className="animate-pulse flex items-center gap-2">
+                {isSearching ? (
+                  <>
+                    <span className="text-blue-400">Searching Deep Web</span>
+                    <span className="flex gap-0.5">
+                      <span className="animate-[bounce_1s_infinite_0ms]">.</span>
+                      <span className="animate-[bounce_1s_infinite_200ms]">.</span>
+                      <span className="animate-[bounce_1s_infinite_400ms]">.</span>
+                    </span>
+                  </>
+                ) : (
+                  "Establishing Neural Link..."
+                )}
+              </span>
             </div>
           )}
         </div>
@@ -688,10 +827,7 @@ function ChatPageInner({
                   {/* Switch model row */}
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <span className="text-[9px] font-black uppercase tracking-widest text-white/20 mr-1">Switch &amp; Retry:</span>
-                    {AVAILABLE_MODELS
-                      .filter(m => m.id !== currentModel)
-                      .slice(0, 4)
-                      .map(m => (
+                    {(AVAILABLE_MODELS as unknown as any[]).filter(m => m.id !== currentModel).slice(0, 4).map(m => (
                         <button
                           key={m.id}
                           onClick={() => {
@@ -740,7 +876,9 @@ function ChatPageInner({
               currentModel={currentModel}
               onModelChange={onModelChange}
               codeCanvasMode={codeCanvasMode}
-              onToggleCodeCanvas={() => setCodeCanvasMode(v => !v)}
+              onToggleCodeCanvas={() => setCodeCanvasMode((v: boolean) => !v)}
+              webSearchMode={webSearchMode}
+              onToggleWebSearch={() => setWebSearchMode((v: boolean) => !v)}
             />
           )}
         </div>
@@ -759,12 +897,15 @@ function ChatPageInner({
 
 export default function ChatPage(props: Record<string, unknown>) {
   return (
-    <Suspense fallback={<div className="flex-1 flex items-center justify-center"><Loader2 size={24} className="animate-spin text-[#333]" /></div>}>
-      <ChatPageInner
-        currentModel={props.currentModel as string | undefined}
-        onModelChange={props.onModelChange as (id: string) => void | undefined}
-        inputStyle={props.inputStyle as string | undefined}
-      />
-    </Suspense>
+    <>
+      <Suspense fallback={<div className="flex-1 flex items-center justify-center"><Loader2 size={24} className="animate-spin text-[#333]" /></div>}>
+        <ChatPageInner
+          currentModel={props.currentModel as string | undefined}
+          onModelChange={props.onModelChange as (id: string) => void | undefined}
+          inputStyle={props.inputStyle as string | undefined}
+        />
+      </Suspense>
+      <WelcomeModal />
+    </>
   );
 }
